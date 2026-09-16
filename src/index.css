@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-[#0a0b14] text-gray-100 antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #1e2133 #0a0b14;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: #0a0b14;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: #1e2133;
+    border-radius: 3px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: #2a2d44;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-[#12141f] border border-white/[0.06] rounded-lg;
+  }
+
+  .glass-card-hover {
+    @apply glass-card transition-colors duration-200 hover:border-white/[0.14] hover:bg-[#151827];
+  }
+
+  .gradient-text {
+    @apply text-blue-400;
+  }
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  .fade-in {
+    animation: fade-in 0.2s ease-out;
+  }
+}

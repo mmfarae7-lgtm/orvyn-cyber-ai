@@ -1,0 +1,11 @@
+[functions.orion-scan]
+verify_jwt = false
+
+[functions.orion-chat]
+verify_jwt = false
+
+[functions.orion-lab]
+verify_jwt = false
+
+[functions.orion-agent]
+verify_jwt = false
