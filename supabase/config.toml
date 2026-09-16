@@ -1,3 +1,6 @@
+[db]
+major_version = 15
+
 [functions.orion-scan]
 verify_jwt = false
 
