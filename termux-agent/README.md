@@ -208,3 +208,85 @@ You can launch scans from the Orion web app, and the agent on your device will e
 **YARA scan shows "Path not found"**
 - For YARA scans, the target field should be a file or directory path on your device
 - Example: `/sdcard/Download/` (Termux) or `C:\Users\Downloads\` (Windows)
+
+---
+
+## دليل الاستخدام بالعربية (Arabic Quick Start)
+
+### كيف يعمل النظام كاملاً؟
+
+1. سجّل دخولك على الموقع `orvyn.is-great.org` (أو من تطبيق أندرويد).
+2. من صفحة **New Scan** اختر أداة (مثل Nmap أو WhatWeb)، أدخل الهدف (رابط أو IP)، ثم اضغط Launch.
+3. المهمة تُحفظ في الخادم، وأساس **الـ Agent** المثبّت على جهازك يلتقطها خلال ثوانٍ وينفّذها بأدوات حقيقية.
+4. النتائج تعود تلقائياً وتظهر في صفحة **Vulnerabilities**.
+
+> **مهم**: الـ Agent يشغّل أدوات الفحص على **جهازك أنت** (موبايل/كمبيوتر)، بينما الموقع يدير المهام ويعرض النتائج. لا يمكن تنفيذ Nmap/Nikto وغيرها من الخادم مباشرة — لذلك تحتاج الـ Agent ليعمل فعلياً في حال اخترت هذه الأدوات.
+
+---
+
+### 📱 تشغيل الـ Agent من الجوال (Termux) — خطوة بخطوة
+
+1. **نزّل تطبيق Termux** من F-Droid (النسخة الرسمية): https://f-droid.org/en/packages/com.termux/
+2. افتحه وحدّث الحزم:
+   ```bash
+   pkg update && pkg upgrade
+   ```
+3. ثبّت الأدوات المطلوبة:
+   ```bash
+   pkg install curl jq nmap nikto whatweb yara git
+   ```
+4. انسخ ملف `orion-agent.sh` إلى الجوال (نزّله من GitHub هذا المجلد أو انقله عبر USB/بلوتوث).
+5. اجعل الملف قابلاً للتنفيذ وشغّله:
+   ```bash
+   chmod +x orion-agent.sh
+   ./orion-agent.sh
+   ```
+6. سترى رسالة "Agent started" ثم يبقى مفتوحاً ينتظر المهام. **لا تغلق Termux** أثناء انتظارك المسح.
+7. عد للموقع، أطلق مسحاً، وشاهد النتيجة تظهر في صفحة **Vulnerabilities**.
+
+> تلميح: إن أردته يعمل في الخلفية جرب داخل Termux:
+> ```bash
+> pkg install termux-services
+> ```
+
+---
+
+### 💻 تشغيل الـ Agent من الكمبيوتر (Windows CMD) — خطوة بخطوة
+
+1. نزّل الملفين التاليين إلى مجلد واحد:
+   - `orion-agent-windows.bat`
+   - `orion-agent-windows.ps1`
+2. ثبّت الأدوات التي تريدها وأضفها لـ PATH:
+   - **Nmap**: https://nmap.org/download.html
+   - **Python**: https://python.org (لتثبيت httpx/sslyze وغيرها بـ `pip`)
+   - **Git**: https://git-scm.com/download/win
+3. افتح **CMD** في نفس المجلد (اختر المجلد ثم اكتب `cmd` في شريط العنوان واضغط Enter).
+4. شغّل الأمر:
+   ```cmd
+   orion-agent-windows.bat
+   ```
+5. اترك النافذة مفتوحة — الـ Agent يتصل بالخادم وينتظر المهام كل 5 ثوانٍ.
+6. أطلق مسحاً من الموقع وشاهد النتيجة في صفحة **Vulnerabilities**.
+
+> إن أحببت PowerShell بدل CMD:
+> ```powershell
+> powershell -ExecutionPolicy Bypass -File orion-agent-windows.ps1
+> ```
+
+---
+
+### 🖥️ Linux / Kali / macOS
+
+```bash
+curl -sL https://raw.githubusercontent.com/mmfarae7-lgtm/orvyn-cyber-ai/main/termux-agent/orion-agent.sh -o orion-agent.sh
+chmod +x orion-agent.sh
+./orion-agent.sh
+```
+(مع تثبيت الأدوات حسب README أعلاه)
+
+---
+
+### ⚙️ ما تحتاجه في حسابك
+
+- حسابات المستخدمين تُنشأ بالبريد وكلمة السر من صفحة Sign Up.
+- الـ Agent لا يحتاج تسجيل دخول — يعمل بمفتاح عمومي (public anon key) معدّ مسبقاً داخل الملف، ولا يرفع أي بيانات حساسة.

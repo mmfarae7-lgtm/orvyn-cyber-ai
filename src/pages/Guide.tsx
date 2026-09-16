@@ -9,6 +9,9 @@ import {
   AlertTriangle,
   Lightbulb,
   ShieldCheck,
+  Smartphone,
+  Monitor,
+  Terminal,
 } from 'lucide-react';
 import { TOOLS } from '@/lib/tools';
 
@@ -52,6 +55,63 @@ export default function Guide() {
         <PageCard icon={FileWarning} title="Vulnerabilities" description="All findings from your scans, filterable by severity and searchable. Click any finding for full details." />
         <PageCard icon={MessageSquare} title="AI Assistant" description="Chat with the Orvyn Cyber AI about security topics. Your conversation history is saved across sessions." />
         <PageCard icon={FlaskConical} title="Lab" description="Run security tools interactively with custom commands. All sessions are saved for later review." />
+      </Section>
+
+      {/* Agents */}
+      <Section icon={Terminal} title="Run Agents on Your Devices" color="cyan">
+        <p className="text-sm text-gray-400 mb-4">
+          The platform can run <b>real security tools</b> on your own devices. Install the
+          <b> Orion Agent</b> on your phone (Termux) or computer (CMD) — it stays connected to your
+          account and executes scans you launch from the web app. Download the agent files from the
+          GitHub repository: <code>termux-agent/</code> folder.
+        </p>
+
+        <div className="space-y-4">
+          <div className="p-4 rounded-lg bg-white/[0.02] border border-white/[0.06]">
+            <div className="flex items-center gap-2 mb-3">
+              <Smartphone className="w-4 h-4 text-green-400" />
+              <h3 className="text-sm font-medium">Phone — via Termux</h3>
+            </div>
+            <div className="space-y-1 text-xs font-mono text-gray-300 whitespace-pre-wrap break-all">
+              {`# 1. Install Termux from F-Droid, then open it and run:
+pkg update && pkg upgrade
+
+# 2. Install the required tools:
+pkg install curl jq nmap nikto whatweb yara git
+
+# 3. Copy the file "orion-agent.sh" to your phone
+#    (from the GitHub repo folder: termux-agent/)
+
+# 4. Make it executable and run:
+chmod +x orion-agent.sh
+./orion-agent.sh`}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              The agent will stay running, poll for new scans every 5 seconds, and execute them locally.
+            </p>
+          </div>
+
+          <div className="p-4 rounded-lg bg-white/[0.02] border border-white/[0.06]">
+            <div className="flex items-center gap-2 mb-3">
+              <Monitor className="w-4 h-4 text-blue-400" />
+              <h3 className="text-sm font-medium">Laptop / PC — via CMD</h3>
+            </div>
+            <div className="space-y-1 text-xs font-mono text-gray-300 whitespace-pre-wrap break-all">
+              {`# 1. Download the files to one folder:
+#    orion-agent-windows.bat
+#    orion-agent-windows.ps1
+
+# 2. Install the security tools you want (see README),
+#    e.g. Nmap from https://nmap.org/download.html
+
+# 3. Open CMD in that folder and run:
+orion-agent-windows.bat`}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              Or PowerShell: <code>powershell -ExecutionPolicy Bypass -File orion-agent-windows.ps1</code>
+            </p>
+          </div>
+        </div>
       </Section>
 
       {/* Tools */}
