@@ -31,6 +31,10 @@ apk-remote/
 .bolt/
 .v3/
 
+# Supabase CLI local state
+supabase/.temp/
+supabase/supabase/
+
 # Android / Gradle
 android/.gradle/
 android/build/
