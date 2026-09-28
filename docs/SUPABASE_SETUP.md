@@ -4,6 +4,49 @@ Everything in this repo targets a Supabase project. The project is **not**
 hardcoded anywhere: the frontend reads it from `.env`, and the agent reads it
 from `termux-agent/orion-config.sh`.
 
+## Current deployment
+
+Verified against the Supabase Management API:
+
+| Item | Value |
+|------|-------|
+| Project | `Orion cyber AI` |
+| Ref | `ahkyfokibvnqkprxvkpf` |
+| Organization | `Orion Org` (`sybgzvvvlqdiepytpzwh`) |
+| Region | `ap-southeast-1` |
+| Status | `ACTIVE_HEALTHY` |
+
+Database and functions are already live and in sync with this repo:
+
+- All 5 migrations in `supabase/migrations/` are applied
+  (`20260903184007` → `20260903210047`).
+- Tables `profiles`, `scans`, `vulnerabilities`, `chat_messages`,
+  `lab_sessions`, `agent_tasks` all exist with RLS enabled and per-user
+  policies (3–4 policies each).
+- Edge functions `orion-scan`, `orion-chat`, `orion-lab`, `orion-agent`
+  are all `ACTIVE` with `verify_jwt = false`.
+- Function secrets (`SUPABASE_URL`, `SUPABASE_ANON_KEY`,
+  `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL`, …) are set.
+
+So for normal use you only need `.env` with the project URL and anon key.
+
+### Organizations on this account
+
+| Name | Id | Projects |
+|------|----|----------|
+| Orion Org | `sybgzvvvlqdiepytpzwh` | 1 (the live one) |
+| Awriq | `asntsultucigueqsdrup` | 0 (empty) |
+
+Two limits are worth knowing before you plan a second project:
+
+1. **Renaming an organization is not available in the Management API.** The
+   spec exposes only `GET` and `POST` on `/v1/organizations` — no `PATCH`,
+   `PUT`, or `DELETE`. Renaming must be done in the dashboard
+   (Organization Settings → rename).
+2. **The account is at the Free plan's 2 active project limit**, so
+   `POST /v1/projects` returns HTTP 400. Creating another project needs the
+   existing one paused or deleted, or the organization upgraded.
+
 ## 1. Create the organization
 
 In the Supabase Dashboard: **Organization Settings → New organization**, and

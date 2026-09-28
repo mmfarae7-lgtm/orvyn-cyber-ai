@@ -14,7 +14,9 @@
 declare(strict_types=1);
 
 // Where the live Supabase project lives, so this page can report health.
-const SUPABASE_URL = 'https://YOUR-PROJECT-REF.supabase.co';
+// scripts/build-infinityfree.sh replaces the placeholder below with the
+// full VITE_SUPABASE_URL value from .env, scheme included.
+const SUPABASE_URL = 'YOUR-SUPABASE-URL';
 
 /**
  * Check whether the Supabase backend is reachable.
