@@ -62,10 +62,15 @@
 set -euo pipefail
 
 # === Configuration ===
-SUPABASE_URL="${ORION_SUPABASE_URL:-https://ahkyfokibvnqkprxvkpf.supabase.co}"
-SUPABASE_ANON_KEY="${ORION_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFoa3lmb2tpYnZucWtwcnh2a3BmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2MjU4OTAsImV4cCI6MjEwNDIwMTg5MH0.WbNvMHLK4sqg3UnFtjXayn_uVxO-TS85FQTEOMzpqXc}"
-AGENT_ID="${ORION_AGENT_ID:-$(hostname 2>/dev/null || echo 'android')-$(date +%s)}"
-POLL_INTERVAL="${ORION_POLL_INTERVAL:-5}"
+# Resolved by orion-env.sh: env vars > ~/.orion-config.sh >
+# ./orion-config.sh > ../.env. Refuses to start when unconfigured so it
+# can never poll a backend that is not yours.
+# shellcheck disable=SC1091
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/orion-env.sh"
+orion_env_load
+orion_require_config
+
+AGENT_ID="${AGENT_ID:-$(hostname 2>/dev/null || echo 'android')-$(date +%s)}"
 
 API_BASE="${SUPABASE_URL}/functions/v1/orion-agent"
 

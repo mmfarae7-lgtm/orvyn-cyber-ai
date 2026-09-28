@@ -1,0 +1,25 @@
+# Orion Cyber AI - agent configuration (bash / Termux / Linux / macOS)
+#
+#   cp orion-config.sh.example orion-config.sh
+#   $EDITOR orion-config.sh
+#   ./orion-agent.sh
+#
+# This file is git-ignored. Do not commit real keys.
+
+# Your Supabase project URL.
+# Supabase Dashboard -> Project Settings -> API -> Project URL
+ORION_SUPABASE_URL="https://YOUR-PROJECT-REF.supabase.co"
+
+# Your Supabase anon (public) key.
+# Supabase Dashboard -> Project Settings -> API -> Project anon key
+# This key is safe to ship in a client app; it is protected by RLS.
+ORION_ANON_KEY="YOUR-ANON-KEY"
+
+# Optional: pin the agent identity (default: hostname-timestamp)
+# ORION_AGENT_ID="my-phone"
+
+# Optional: seconds between polls (default: 5)
+# ORION_POLL_INTERVAL="5"
+
+# Optional: path to your YARA rules file
+# ORION_YARA_RULES="$HOME/orion-yara-rules.yar"

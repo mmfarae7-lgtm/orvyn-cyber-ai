@@ -22,11 +22,15 @@ dist-ssr
 *.sw?
 .env
 
+# Local agent config (real keys, per machine)
+termux-agent/orion-config.sh
+termux-agent/orion-config.ps1
+
 # Archives and backups
 *.zip
 
 # Deploy / local copies
-deploy/
+deploy/*/htdocs/
 apk-remote/
 .bolt/
 .v3/

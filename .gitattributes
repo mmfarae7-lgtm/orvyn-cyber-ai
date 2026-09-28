@@ -1,0 +1,19 @@
+# The agent and build scripts run under bash (Termux, Linux, macOS) and
+# Git Bash on Windows. CRLF line endings break them with
+# "\r: command not found", so keep these files LF-only everywhere.
+*.sh text eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.mjs text eol=lf
+*.js  text eol=lf
+*.ts  text eol=lf
+*.tsx text eol=lf
+*.json text eol=lf
+*.sql text eol=lf
+*.php text eol=lf
+*.md  text eol=lf
+
+# Keep YARA rules and the Android bundle byte-exact.
+*.yar text eol=lf
+*.png binary
+*.jar binary

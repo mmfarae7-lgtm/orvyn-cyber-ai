@@ -11,6 +11,42 @@ The Orion Agent is a lightweight script that runs on your device (Android/Termux
 | `orion-agent.sh` | Termux / Kali Linux / macOS / Linux | Universal Bash agent |
 | `orion-agent-windows.ps1` | Windows (PowerShell) | PowerShell agent |
 | `orion-agent-windows.bat` | Windows (CMD) | CMD launcher for the PowerShell script |
+| `orion-env.sh` | Termux / Linux / macOS | Resolves the backend URL + key (committed) |
+| `orion-env.ps1` | Windows | Resolves the backend URL + key (committed) |
+| `orion-config.sh.example` | Termux / Linux / macOS | Template for your settings |
+| `orion-config.ps1.example` | Windows | Template for your settings |
+
+---
+
+## Step 0 (required): point the agent at your Supabase project
+
+The agent ships with **no** built-in backend. You must tell it which Supabase
+project to poll, otherwise it refuses to start.
+
+Get both values from **Supabase Dashboard → Project Settings → API**.
+
+**Termux / Linux / macOS**
+```bash
+cp orion-config.sh.example orion-config.sh
+$EDITOR orion-config.sh          # set ORION_SUPABASE_URL and ORION_ANON_KEY
+```
+
+**Windows (PowerShell)**
+```powershell
+copy orion-config.ps1.example orion-config.ps1
+notepad orion-config.ps1         # set $env:ORION_SUPABASE_URL and $env:ORION_ANON_KEY
+```
+
+Skip the file entirely and just export the variables if you prefer:
+
+```bash
+export ORION_SUPABASE_URL="https://<your-project-ref>.supabase.co"
+export ORION_ANON_KEY="<your-anon-key>"
+./orion-agent.sh
+```
+
+Environment variables always override the config file, which always overrides
+the repository `.env`.
 
 ---
 
@@ -157,15 +193,23 @@ powershell -ExecutionPolicy Bypass -File orion-agent-windows.ps1
 
 ## Configuration
 
-All settings have defaults but can be overridden with environment variables:
+Settings are resolved in this order, highest priority first:
+
+1. Environment variables
+2. `~/.orion-config.sh` (or `orion-config.ps1`)
+3. `./orion-config.sh` (or `orion-config.ps1`) next to the agent
+4. `.env` in the repository root
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ORION_SUPABASE_URL` | Orion backend URL | Backend URL |
-| `ORION_ANON_KEY` | Pre-configured key | Supabase anon key |
+| `ORION_SUPABASE_URL` | *(none — required)* | Your Supabase project URL |
+| `ORION_ANON_KEY` | *(none — required)* | Your Supabase anon (public) key |
 | `ORION_AGENT_ID` | hostname-timestamp | Unique agent identifier |
 | `ORION_POLL_INTERVAL` | 5 | Seconds between polls |
 | `ORION_YARA_RULES` | ~/orion-yara-rules.yar | Custom YARA rules path |
+
+If `ORION_SUPABASE_URL` or `ORION_ANON_KEY` is missing, the agent prints an
+error and exits instead of guessing a backend.
 
 ---
 
@@ -202,8 +246,10 @@ You can launch scans from the Orion web app, and the agent on your device will e
 
 **Cannot connect to backend**
 - Check your internet connection
-- Verify the backend URL is correct
-- The default URL is pre-configured and should work
+- Verify the URL and anon key match your Supabase project
+- Run `./orion-agent.sh` — it prints the `Backend:` line it is using
+- Re-copy the example config; it is easy to leave the
+  `https://YOUR-PROJECT-REF.supabase.co` placeholder in place
 
 **YARA scan shows "Path not found"**
 - For YARA scans, the target field should be a file or directory path on your device
@@ -235,14 +281,25 @@ You can launch scans from the Orion web app, and the agent on your device will e
    ```bash
    pkg install curl jq nmap nikto whatweb yara git
    ```
-4. انسخ ملف `orion-agent.sh` إلى الجوال (نزّله من GitHub هذا المجلد أو انقله عبر USB/بلوتوث).
-5. اجعل الملف قابلاً للتنفيذ وشغّله:
+4. انسخ ملفات الـ Agent إلى الجوال (نزّلها من GitHub هذا المجلد أو انقلها عبر USB/بلوتوث): `orion-agent.sh` و `orion-env.sh` و `orion-config.sh.example`.
+5. **اضبط الخادم (خطوة إلزامية)** — انسخ ملف الإعدادات وافتحه:
+   ```bash
+   cp orion-config.sh.example orion-config.sh
+   nano orion-config.sh
+   ```
+   ضع رابط مشروعك ومفتاحه العام داخله:
+   ```bash
+   ORION_SUPABASE_URL="https://<اسم-مشروعك>.supabase.co"
+   ORION_ANON_KEY="<مفتاح-anon>"
+   ```
+  Taken both from: **Supabase Dashboard → Project Settings → API**
+6. اجعل الملف قابلاً للتنفيذ وشغّله:
    ```bash
    chmod +x orion-agent.sh
    ./orion-agent.sh
    ```
-6. سترى رسالة "Agent started" ثم يبقى مفتوحاً ينتظر المهام. **لا تغلق Termux** أثناء انتظارك المسح.
-7. عد للموقع، أطلق مسحاً، وشاهد النتيجة تظهر في صفحة **Vulnerabilities**.
+7. تأكد أن السطر `Backend:` يعرض مشروعك، ثم ستظهر رسالة "Agent started" ويبقى مفتوحاً ينتظر المهام. **لا تغلق Termux** أثناء انتظارك المسح.
+8. عد للموقع، أطلق مسحاً، وشاهد النتيجة تظهر في صفحة **Vulnerabilities**.
 
 > تلميح: إن أردته يعمل في الخلفية جرب داخل Termux:
 > ```bash
@@ -253,20 +310,33 @@ You can launch scans from the Orion web app, and the agent on your device will e
 
 ### 💻 تشغيل الـ Agent من الكمبيوتر (Windows CMD) — خطوة بخطوة
 
-1. نزّل الملفين التاليين إلى مجلد واحد:
+1. نزّل الملفات التالية إلى مجلد واحد:
    - `orion-agent-windows.bat`
    - `orion-agent-windows.ps1`
+   - `orion-env.ps1`
+   - `orion-config.ps1.example`
 2. ثبّت الأدوات التي تريدها وأضفها لـ PATH:
    - **Nmap**: https://nmap.org/download.html
    - **Python**: https://python.org (لتثبيت httpx/sslyze وغيرها بـ `pip`)
    - **Git**: https://git-scm.com/download/win
-3. افتح **CMD** في نفس المجلد (اختر المجلد ثم اكتب `cmd` في شريط العنوان واضغط Enter).
-4. شغّل الأمر:
+3. **اضبط الخادم (خطوة إلزامية)** — في CMD:
+   ```cmd
+   copy orion-config.ps1.example orion-config.ps1
+   notepad orion-config.ps1
+   ```
+   اكتب داخله:
+   ```powershell
+   $env:ORION_SUPABASE_URL  = "https://<اسم-مشروعك>.supabase.co"
+   $env:ORION_ANON_KEY      = "<مفتاح-anon>"
+   ```
+  Taken both from: **Supabase Dashboard → Project Settings → API**
+4. افتح **CMD** في نفس المجلد (اختر المجلد ثم اكتب `cmd` في شريط العنوان واضغط Enter).
+5. شغّل الأمر:
    ```cmd
    orion-agent-windows.bat
    ```
-5. اترك النافذة مفتوحة — الـ Agent يتصل بالخادم وينتظر المهام كل 5 ثوانٍ.
-6. أطلق مسحاً من الموقع وشاهد النتيجة في صفحة **Vulnerabilities**.
+6. تأكد أن السطر `Backend:` يعرض مشروعك، واترك النافذة مفتوحة — الـ Agent يتصل بالخادم وينتظر المهام كل 5 ثوانٍ.
+7. أطلق مسحاً من الموقع وشاهد النتيجة في صفحة **Vulnerabilities**.
 
 > إن أحببت PowerShell بدل CMD:
 > ```powershell
@@ -278,7 +348,11 @@ You can launch scans from the Orion web app, and the agent on your device will e
 ### 🖥️ Linux / Kali / macOS
 
 ```bash
-curl -sL https://raw.githubusercontent.com/mmfarae7-lgtm/orvyn-cyber-ai/main/termux-agent/orion-agent.sh -o orion-agent.sh
+curl -sLO https://raw.githubusercontent.com/mmfarae7-lgtm/orvyn-cyber-ai/main/termux-agent/orion-agent.sh
+curl -sLO https://raw.githubusercontent.com/mmfarae7-lgtm/orvyn-cyber-ai/main/termux-agent/orion-env.sh
+curl -sLO https://raw.githubusercontent.com/mmfarae7-lgtm/orvyn-cyber-ai/main/termux-agent/orion-config.sh.example
+cp orion-config.sh.example orion-config.sh
+$EDITOR orion-config.sh          # ضع رابط مشروعك ومفتاح anon
 chmod +x orion-agent.sh
 ./orion-agent.sh
 ```
@@ -289,4 +363,5 @@ chmod +x orion-agent.sh
 ### ⚙️ ما تحتاجه في حسابك
 
 - حسابات المستخدمين تُنشأ بالبريد وكلمة السر من صفحة Sign Up.
-- الـ Agent لا يحتاج تسجيل دخول — يعمل بمفتاح عمومي (public anon key) معدّ مسبقاً داخل الملف، ولا يرفع أي بيانات حساسة.
+- الـ Agent لا يحتاج تسجيل دخول — يعمل بمفتاح **anon** (public) تكتبه أنت في ملف الإعداد. المفتاح محمي بسياسات RLS، لذلك نشره في جهازك أو حتى في الواجهة آمن.
+- **لا تضع** مفتاح `service_role` في الوكيل — لا يحتاجه، ووضعه هناك يمنح صلاحيات كاملة على قاعدة البيانات.

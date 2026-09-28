@@ -1,0 +1,21 @@
+# Orion Cyber AI - agent configuration (Windows PowerShell)
+#
+#   copy orion-config.ps1.example orion-config.ps1
+#   notepad orion-config.ps1
+#
+# orion-config.ps1 is git-ignored. Do not commit real keys.
+
+# Your Supabase project URL.
+# Supabase Dashboard -> Project Settings -> API -> Project URL
+$env:ORION_SUPABASE_URL  = "https://YOUR-PROJECT-REF.supabase.co"
+
+# Your Supabase anon (public) key.
+# Supabase Dashboard -> Project Settings -> API -> Project anon key
+# This key is safe to ship in a client app; it is protected by RLS.
+$env:ORION_ANON_KEY      = "YOUR-ANON-KEY"
+
+# Optional: pin the agent identity (default: COMPUTERNAME-timestamp)
+# $env:ORION_AGENT_ID     = "my-pc"
+
+# Optional: seconds between polls (default: 5)
+# $env:ORION_POLL_INTERVAL = 5

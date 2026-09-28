@@ -25,8 +25,15 @@
 # ============================================================
 
 # === Configuration ===
-$env:SUPABASE_URL = if ($env:ORION_SUPABASE_URL) { $env:ORION_SUPABASE_URL } else { "https://ahkyfokibvnqkprxvkpf.supabase.co" }
-$env:SUPABASE_ANON_KEY = if ($env:ORION_ANON_KEY) { $env:ORION_ANON_KEY } else { "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFoa3lmb2tpYnZucWtwcnh2a3BmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2MjU4OTAsImV4cCI6MjEwNDIwMTg5MH0.WbNvMHLK4sqg3UnFtjXayn_uVxO-TS85FQTEOMzpqXc" }
+# Resolved by orion-env.ps1: env vars > ~/.orion-config.ps1 >
+# ./orion-config.ps1. There is no hardcoded default project on purpose,
+# so the agent can never silently poll a backend that is not yours.
+$ConfigDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }
+
+. (Join-Path $ConfigDir 'orion-env.ps1')
+Import-OrionEnv -AgentDir $ConfigDir
+Assert-OrionConfig
+
 $AgentId = if ($env:ORION_AGENT_ID) { $env:ORION_AGENT_ID } else { "$env:COMPUTERNAME-$(Get-Date -Format 'yyyyMMddHHmmss')" }
 $PollInterval = if ($env:ORION_POLL_INTERVAL) { [int]$env:ORION_POLL_INTERVAL } else { 5 }
 
