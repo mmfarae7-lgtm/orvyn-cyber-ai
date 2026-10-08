@@ -2,12 +2,36 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/orvyn-logo.png" />
+    <link rel="icon" type="image/png" href="orvyn-logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- PWA: add-to-home-screen / installable app -->
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="theme-color" content="#0a0b14" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Orvyn" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+
     <title>Orvyn Cyber — Security Scanning Platform</title>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Register the service worker on https (or localhost dev) only.
+      // Never on file:// — the Android WebView bundle stays unaffected.
+      if (
+        'serviceWorker' in navigator &&
+        (location.protocol === 'https:' ||
+          location.hostname === 'localhost' ||
+          location.hostname === '127.0.0.1')
+      ) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('./sw.js').catch(function () {});
+        });
+      }
+    </script>
   </body>
 </html>
