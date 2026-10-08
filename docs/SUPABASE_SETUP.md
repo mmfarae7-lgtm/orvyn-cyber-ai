@@ -30,6 +30,25 @@ Database and functions are already live and in sync with this repo:
 
 So for normal use you only need `.env` with the project URL and anon key.
 
+### End-to-end connectivity verified (2026-10-08)
+
+A temporary test account was exercised against the live project, then removed
+(`DELETE` of the scan/task rows and the `auth.users` row, confirmed gone):
+
+| Step | Result |
+|------|--------|
+| `POST /auth/v1/signup` | `200`, user created |
+| Email confirmation (`UPDATE auth.users SET email_confirmed_at`) | ok |
+| `POST /auth/v1/token?grant_type=password` | session obtained |
+| `POST /rest/v1/profiles` (RLS) | created/touched only own row |
+| `POST /rest/v1/scans` (RLS) | row created with `status: pending` |
+| `POST /functions/v1/orion-scan` (headers) | `200 {"success":true,...}` |
+| `POST /functions/v1/orion-agent/submit` | task created (`status: pending`) |
+| `GET /functions/v1/orion-agent/poll` | `200 {"task":null}` (anon) |
+| `GET /functions/v1/orion-agent/tasks` (anon) | `401` (correctly guarded) |
+
+The remaining "one-time" dashboard items are documented in the next section.
+
 ### Organizations on this account
 
 | Name | Id | Projects |
