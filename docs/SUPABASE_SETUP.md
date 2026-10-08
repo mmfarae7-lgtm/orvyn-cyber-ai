@@ -173,3 +173,26 @@ InfinityFree provides PHP 8.4 + MySQL on shared hosting, with no Node.js,
 Docker, or long-running processes. It can host the **static frontend** and the
 PHP status page, but it cannot host the Supabase backend. The browser talks to
 Supabase directly, so no server-side proxy is required.
+
+## Real scanning engine (orion-scan)
+
+`supabase/functions/orion-scan/index.ts` performs **live network checks**, not
+simulated results. What each tool actually does server-side:
+
+| Tool | Real mechanism |
+|------|----------------|
+| nmap / masscan | Raw TCP `connect()` probes (27 common ports, or `options.ports`), banner grab, HTTP probe for web ports. States: open / closed / timeout / unchecked. Verified against independent local tests (9/9 match on scanme.nmap.org + orvyn.is-great.org). |
+| dns | DNS-over-HTTPS (dns.google): A/AAAA/CNAME/MX/NS/TXT/SOA/CAA + SPF/DMARC/CAA/DNSSEC analysis |
+| sslyze | Real TLS handshake + latency, HSTS policy analysis, HTTP→HTTPS redirect check, certificate issuer/expiry from crt.sh (Certificate Transparency, one retry) |
+| httpx | Live probes of both schemes: status, redirect target, latency, real `<title>`, server header |
+| nuclei | Live fetches: security headers, `.git/config` + `.env` content-validated, directory listing, admin paths with soft-404 detection |
+| nikto | Dangerous files with **content validation** (ZIP magic, SQL keywords, phpinfo markers) — no SPA false positives |
+| zap | Cookie flag audit (Secure/HttpOnly/SameSite), mixed content, CSRF heuristics, version disclosure |
+| trivy / semgrep / gitleaks / yara | Pattern analysis of assets the target actually serves (HTML + up to 5 external scripts). Gitleaks also decodes JWTs to flag exposed `service_role` keys. Scope is stated in every result as an `info` finding; container/repo/file scans run on the Termux/Windows agent. |
+
+Safety: an SSRF guard resolves the target (DoH) and refuses private/loopback/
+link-local addresses before any probe.
+
+The frontend **Scan History** page (`src/pages/Scans.tsx`) renders the raw
+`scans.results` payload: port table with banners/timings, DNS records, TLS
+evidence, probes, and the check log.

@@ -4,6 +4,7 @@ import Layout, { type PageId } from '@/components/Layout';
 import AuthPage from '@/pages/AuthPage';
 import Dashboard from '@/pages/Dashboard';
 import ScanLaunch from '@/pages/ScanLaunch';
+import Scans from '@/pages/Scans';
 import Vulnerabilities from '@/pages/Vulnerabilities';
 import Chat from '@/pages/Chat';
 import Lab from '@/pages/Lab';
@@ -32,6 +33,7 @@ function AppContent() {
     <Layout currentPage={page} onNavigate={setPage}>
       {page === 'dashboard' && <Dashboard onNavigate={setPage} />}
       {page === 'scan' && <ScanLaunch onNavigate={setPage} />}
+      {page === 'scans' && <Scans onNavigate={setPage} />}
       {page === 'vulnerabilities' && <Vulnerabilities />}
       {page === 'chat' && <Chat />}
       {page === 'lab' && <Lab />}

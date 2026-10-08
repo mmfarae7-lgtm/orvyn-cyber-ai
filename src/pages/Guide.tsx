@@ -38,7 +38,9 @@ export default function Guide() {
           Go to the <b>New Scan</b> page, pick a security tool, enter your target (URL or IP), configure options, and launch.
         </Step>
         <Step num={3} title="Review Findings">
-          After a scan completes, results appear in the <b>Vulnerabilities</b> page. Each finding includes severity, evidence, and remediation steps.
+          After a scan completes, the <b>Scan History</b> page shows the raw results — live port states, banners,
+          DNS records, and TLS evidence — while the <b>Vulnerabilities</b> page lists each finding with severity,
+          evidence, and remediation steps.
         </Step>
         <Step num={4} title="Use the AI Assistant">
           The <b>AI Assistant</b> answers questions about security concepts, tools, and best practices. Your conversation is saved.

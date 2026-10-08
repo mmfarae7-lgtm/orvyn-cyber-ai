@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import {
   LayoutDashboard,
   Rocket,
+  ClipboardList,
   FileWarning,
   MessageSquare,
   FlaskConical,
@@ -13,7 +14,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 
-export type PageId = 'dashboard' | 'scan' | 'vulnerabilities' | 'chat' | 'lab' | 'guide';
+export type PageId = 'dashboard' | 'scan' | 'scans' | 'vulnerabilities' | 'chat' | 'lab' | 'guide';
 
 type NavItem = {
   id: PageId;
@@ -24,6 +25,7 @@ type NavItem = {
 const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'scan', label: 'New Scan', icon: Rocket },
+  { id: 'scans', label: 'Scan History', icon: ClipboardList },
   { id: 'vulnerabilities', label: 'Vulnerabilities', icon: FileWarning },
   { id: 'chat', label: 'AI Assistant', icon: MessageSquare },
   { id: 'lab', label: 'Lab', icon: FlaskConical },

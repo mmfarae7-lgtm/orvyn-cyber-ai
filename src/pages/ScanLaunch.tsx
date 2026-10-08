@@ -94,8 +94,8 @@ export default function ScanLaunch({ onNavigate }: { onNavigate: (page: PageId) 
 
         setSuccess(true);
         setTimeout(() => {
-          onNavigate('vulnerabilities');
-        }, 2000);
+          onNavigate('scans');
+        }, 1800);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to launch scan');
@@ -111,7 +111,7 @@ export default function ScanLaunch({ onNavigate }: { onNavigate: (page: PageId) 
           <CheckCircle2 className="w-8 h-8 text-green-500" />
         </div>
         <h2 className="text-xl font-bold mb-2">Scan Completed!</h2>
-        <p className="text-gray-500 text-sm">Redirecting to vulnerability report...</p>
+        <p className="text-gray-500 text-sm">Redirecting to raw scan results...</p>
       </div>
     );
   }
