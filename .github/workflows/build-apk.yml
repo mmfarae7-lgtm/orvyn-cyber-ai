@@ -1,0 +1,117 @@
+name: build-apk
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build-apk.yml'
+      - 'android/**'
+      - 'src/**'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.*'
+      - 'tailwind.config.*'
+      - 'postcss.config.*'
+      - 'scripts/sync-android.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apk-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # The anon key is public by design (it is already inside the committed
+      # Android bundle); the service_role key is never shipped anywhere.
+      - name: Write build environment
+        run: |
+          cat > .env <<'EOF'
+          VITE_SUPABASE_URL=https://ahkyfokibvnqkprxvkpf.supabase.co
+          VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFoa3lmb2tpYnZucWtwcnh2a3BmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2MjU4OTAsImV4cCI6MjEwNDIwMTg5MH0.WbNvMHLK4sqg3UnFtjXayn_uVxO-TS85FQTEOMzpqXc
+          VITE_ADMIN_EMAILS=m.m.farae7@gmail.com
+          EOF
+
+      - name: Build frontend and sync Android bundle
+        run: npm run build:android
+
+      - name: Restore release keystore (identical signature across builds)
+        id: keystore-cache
+        uses: actions/cache@v4
+        with:
+          path: android/keystore/orvyn-release.jks
+          key: orvyn-release-keystore-v1
+
+      - name: Generate release keystore (first build only)
+        if: steps.keystore-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p android/keystore
+          keytool -genkeypair -v \
+            -keystore android/keystore/orvyn-release.jks \
+            -alias orvyn -keyalg RSA -keysize 2048 -validity 10950 \
+            -storepass "OrvynCyber2026!" -keypass "OrvynCyber2026!" \
+            -dname "CN=Orvyn Cyber, OU=Dev, O=Orvyn Cyber, L=Online, ST=Online, C=EG"
+
+      - name: Assemble release APK
+        run: ./gradlew :app:assembleRelease
+        working-directory: android
+
+      - name: Zipalign and sign the APK
+        working-directory: android
+        run: |
+          set -euo pipefail
+          UNSIGNED="app/build/outputs/apk/release/app-release-unsigned.apk"
+          BT="$ANDROID_HOME/build-tools/34.0.0"
+          "$BT/zipalign" -p -f 4 "$UNSIGNED" "$RUNNER_TEMP/aligned.apk"
+          "$BT/apksigner" sign \
+            --ks "keystore/orvyn-release.jks" \
+            --ks-key-alias orvyn \
+            --ks-pass "pass:OrvynCyber2026!" \
+            --key-pass "pass:OrvynCyber2026!" \
+            --out "app/build/outputs/apk/release/orvyn-cyber.apk" \
+            "$RUNNER_TEMP/aligned.apk"
+
+      - name: Write keystore info
+        run: |
+          cat > android/keystore/KEYSTORE-INFO.txt <<'EOF'
+          Keystore file: orvyn-release.jks
+          Alias:         orvyn
+          Store pass:    OrvynCyber2026!
+          Key pass:      OrvynCyber2026!
+          If the keystore is lost, the next build creates a new signing key and
+          Android will require an uninstall before installing the rebuilt app.
+          EOF
+
+      - name: Upload APK and keystore
+        uses: actions/upload-artifact@v4
+        with:
+          name: orvyn-cyber-apk
+          path: |
+            android/app/build/outputs/apk/release/orvyn-cyber.apk
+            android/keystore/orvyn-release.jks
+            android/keystore/KEYSTORE-INFO.txt
+          if-no-files-found: error

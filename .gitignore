@@ -46,3 +46,4 @@ android/**/build/
 android/local.properties
 android/.kotlin/
 android/captures/
+android/keystore/
