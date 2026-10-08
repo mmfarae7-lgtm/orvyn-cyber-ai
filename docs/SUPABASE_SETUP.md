@@ -27,6 +27,13 @@ Database and functions are already live and in sync with this repo:
   are all `ACTIVE` with `verify_jwt = false`.
 - Function secrets (`SUPABASE_URL`, `SUPABASE_ANON_KEY`,
   `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL`, …) are set.
+- Auth config: `mailer_autoconfirm = true` (set 2026-10-08 via
+  `PATCH /v1/projects/{ref}/config/auth`). The built-in email provider
+  allows only **2 emails/hour per project**, so confirmation emails made
+  signups fail with `over_email_send_rate_limit`. With auto-confirm,
+  `signup` returns a session immediately and no email is sent.
+  Verified end-to-end: signup → signin with no manual confirm → user row
+  has `email_confirmed_at` set → test user deleted.
 
 So for normal use you only need `.env` with the project URL and anon key.
 
