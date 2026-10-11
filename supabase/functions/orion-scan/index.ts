@@ -142,7 +142,7 @@ const QUICK_PHASES = [
 function phaseSelection(
   profile: Profile,
   tool: string,
-  options: Record<string, string>
+  options: Record<string, string> = {}
 ): Set<string> {
   const set = new Set<string>(CORE_PHASES);
   if (profile === 'custom') {
@@ -225,7 +225,7 @@ Deno.serve(async (req: Request) => {
     const profile = normalizeProfile(
       body.profile ?? scanRow.profile ?? (options.profile as string) ?? null
     );
-    const requestedPhases = phaseSelection(profile, tool);
+    const requestedPhases = phaseSelection(profile, tool, options);
 
     const givenUrl = /^https?:\/\//i.test(target);
     const hostname = target.replace(/^https?:\/\//i, '').split('/')[0].split(':')[0].trim();
