@@ -1011,7 +1011,7 @@ Deno.serve(async (req: Request) => {
     };
 
     if (vulnerabilities.length > 0 && !abort) {
-      const rows = vulnerabilities.map((f) => ({
+      const mapped = vulnerabilities.map((f) => ({
         scan_id: scanId,
         user_id: userId,
         title: f.title,
@@ -1031,9 +1031,25 @@ Deno.serve(async (req: Request) => {
         protocol: f.port ? 'tcp' : null,
         refs: f.refs ?? null,
       }));
-      const { error: insErr } = await supabase.from('vulnerabilities').insert(rows);
-      if (insErr) {
-        await addEvidence(15, 'orion-engine', { finding_insert_error: true }, insErr.message);
+      // Idempotent insert. The vulnerabilities table has a partial unique
+      // index on (scan_id, title, coalesce(port,-1)); skip findings already
+      // stored for this scan so a retried orchestration never aborts the whole
+      // batch and never loses newly discovered findings.
+      const { data: existingRows } = await supabase
+        .from('vulnerabilities')
+        .select('title, port')
+        .eq('scan_id', scanId);
+      const stored = new Set(
+        (existingRows ?? []).map(
+          (r: { title: string; port: number | null }) => `${r.title}::${r.port ?? ''}`
+        )
+      );
+      const rows = mapped.filter((r) => !stored.has(`${r.title}::${r.port ?? ''}`));
+      if (rows.length > 0) {
+        const { error: insErr } = await supabase.from('vulnerabilities').insert(rows);
+        if (insErr) {
+          await addEvidence(15, 'orion-engine', { finding_insert_error: true }, insErr.message);
+        }
       }
     }
 

@@ -326,7 +326,7 @@ async function mergeIntoScan(
     if (status === 'completed') {
       const hits = parseNucleiOutput(rawClean);
       if (hits.length > 0) {
-        const rows = hits.map((h) => ({
+        const mapped = hits.map((h) => ({
           scan_id: scanId,
           user_id: task.user_id,
           title: `[${h.template}] ${h.rest.split(' - ')[0].slice(0, 300)}`,
@@ -335,34 +335,57 @@ async function mergeIntoScan(
           evidence: `nuclei output line: [${h.severity}] [${h.template}] ${h.rest}`.slice(0, 4000),
           remediation: `Fix the condition reported by nuclei template "${h.template}" and re-run the template to confirm.`,
           cve: /^[cC][vV][eE]-\d{4}-\d+$/.test(h.template) ? h.template.toUpperCase() : null,
-          port: null,
-          service: null,
+          port: null as number | null,
+          service: null as string | null,
           confidence: 'confirmed',
           detection_method: 'nuclei_template',
           tool: 'nuclei',
           tool_version: toolVersion,
           detected_at: new Date().toISOString(),
           asset: typeof results.scope === 'object' && results.scope ? ((results.scope as { hostname?: string }).hostname ?? null) : null,
-          protocol: null,
+          protocol: null as string | null,
           refs: ['https://github.com/projectdiscovery/nuclei-templates'],
         }));
-        const { error: insErr } = await supabase.from('vulnerabilities').insert(rows);
-        if (insErr) {
-          // fall back to a single finding row so nothing is silently lost
-          await supabase.from('vulnerabilities').insert({
-            scan_id: scanId,
-            user_id: task.user_id,
-            title: `nuclei reported ${hits.length} finding(s)`,
-            severity: 'info',
-            description: 'Bulk insert failed; raw output preserved in scan evidence.',
-            evidence: rawClean.slice(0, 2000),
-            remediation: 'Review the stored nuclei output in the evidence tab.',
-            confidence: 'confirmed',
-            detection_method: 'nuclei_template',
-            tool: 'nuclei',
-            tool_version: toolVersion,
-            detected_at: new Date().toISOString(),
-          });
+
+        // Idempotent: never re-insert a finding already stored for this scan
+        // (agent retries / repeated results) and never insert the same
+        // title+port twice in one batch — the DB has a partial unique index.
+        const { data: existingRows } = await supabase
+          .from('vulnerabilities')
+          .select('title, port')
+          .eq('scan_id', scanId);
+        const stored = new Set(
+          (existingRows ?? []).map(
+            (r: { title: string; port: number | null }) => `${r.title}::${r.port ?? ''}`
+          )
+        );
+        const seen = new Set<string>();
+        const rows = mapped.filter((r) => {
+          const k = `${r.title}::${r.port ?? ''}`;
+          if (stored.has(k) || seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+
+        if (rows.length > 0) {
+          const { error: insErr } = await supabase.from('vulnerabilities').insert(rows);
+          if (insErr) {
+            // fall back to a single finding row so nothing is silently lost
+            await supabase.from('vulnerabilities').insert({
+              scan_id: scanId,
+              user_id: task.user_id,
+              title: `nuclei reported ${hits.length} finding(s)`,
+              severity: 'info',
+              description: 'Bulk insert failed; raw output preserved in scan evidence.',
+              evidence: rawClean.slice(0, 2000),
+              remediation: 'Review the stored nuclei output in the evidence tab.',
+              confidence: 'confirmed',
+              detection_method: 'nuclei_template',
+              tool: 'nuclei',
+              tool_version: toolVersion,
+              detected_at: new Date().toISOString(),
+            });
+          }
         }
       }
       phaseSummary = `Binary nuclei run completed by agent "${agentName}" (${hits.length} template hit(s) recorded)`;
