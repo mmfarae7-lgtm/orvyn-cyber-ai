@@ -1,4 +1,23 @@
-﻿import { createClient } from 'npm:@supabase/supabase-js@2';
+import { createClient } from 'npm:@supabase/supabase-js@2';
+import {
+  PHASES,
+  computeCoverage,
+  resolvePortScope,
+  mapPortState,
+  countStates,
+  stampFinding,
+  truncate,
+  audit,
+} from '../_shared/scan-core.ts';
+import type {
+  Profile,
+  PhaseDef,
+  PhaseState,
+  PhaseStatus,
+  CoverageArea,
+  PortEntry,
+  PortCoverage,
+} from '../_shared/scan-core.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -10,7 +29,8 @@ interface ScanRequest {
   scanId: string;
   tool: string;
   target: string;
-  options: Record<string, string>;
+  options?: Record<string, string>;
+  profile?: string;
 }
 
 interface VulnerabilityFinding {
@@ -22,6 +42,13 @@ interface VulnerabilityFinding {
   cve?: string;
   port?: number;
   service?: string;
+  // evidence-first extensions (filled by the correlation phase)
+  detection_method?: string;
+  tool?: string;
+  tool_version?: string;
+  confidence?: 'confirmed' | 'high' | 'medium' | 'low' | 'unspecified';
+  protocol?: string;
+  refs?: string[];
 }
 
 type ProbeState = 'open' | 'closed' | 'timeout' | 'unchecked';
@@ -31,148 +58,1056 @@ interface ProbeResult {
   banner?: string;
 }
 
+interface PhaseContext {
+  hostname: string;
+  url: string;
+  givenUrl: boolean;
+  targetType: 'url' | 'ipv4' | 'ipv6' | 'domain' | 'invalid';
+  profile: Profile;
+  options: Record<string, string>;
+  tool: string;
+  entries: PortEntry[];
+  probeDefinitive: boolean;
+  delegated: Array<{ phase: number; task_id: string; key: string }>;
+}
+
+/** Parallel TCP probes per batch. 64 keeps a 500-port custom scope within budget. */
+const PORT_CONCURRENCY = 64;
+
+function normalizeProfile(p: string | null | undefined): Profile {
+  return p === 'quick' || p === 'comprehensive' || p === 'custom' ? p : 'standard';
+}
+
+function classifyTarget(
+  hostname: string,
+  givenUrl: boolean
+): PhaseContext['targetType'] {
+  if (!hostname) return 'invalid';
+  if (givenUrl) return 'url';
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) return 'ipv4';
+  if (hostname.includes(':') && /^[0-9a-fA-F:]+$/.test(hostname)) return 'ipv6';
+  if (/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(hostname)) {
+    return 'domain';
+  }
+  return 'invalid';
+}
+
+/** Phases a selected tool guarantees, regardless of profile. */
+const TOOL_PHASES: Record<string, string[]> = {
+  dns: ['dns_analysis'],
+  sslyze: ['tls_analysis'],
+  whatweb: ['technology_identification'],
+  httpx: ['http_analysis'],
+  zap: ['configuration_analysis'],
+  nmap: ['port_discovery', 'service_detection'],
+  masscan: ['port_discovery', 'service_detection'],
+  nuclei: ['vulnerability_assessment'],
+  nikto: ['vulnerability_assessment'],
+  trivy: ['vulnerability_assessment'],
+  semgrep: ['vulnerability_assessment'],
+  gitleaks: ['vulnerability_assessment'],
+  yara: ['vulnerability_assessment'],
+};
+
+const CORE_PHASES = [
+  'target_validation',
+  'evidence_collection',
+  'correlation',
+  'risk_classification',
+  'remediation',
+  'report',
+];
+
+const FULL_PHASES = [
+  'dns_analysis',
+  'host_discovery',
+  'port_discovery',
+  'service_detection',
+  'http_analysis',
+  'tls_analysis',
+  'technology_identification',
+  'configuration_analysis',
+  'vulnerability_assessment',
+];
+
+const QUICK_PHASES = [
+  'dns_analysis',
+  'host_discovery',
+  'port_discovery',
+  'service_detection',
+  'http_analysis',
+  'configuration_analysis',
+];
+
+function phaseSelection(
+  profile: Profile,
+  tool: string,
+  options: Record<string, string>
+): Set<string> {
+  const set = new Set<string>(CORE_PHASES);
+  if (profile === 'custom') {
+    const picked = (options.phases ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (const k of picked) set.add(k);
+  } else if (profile === 'quick') {
+    for (const k of QUICK_PHASES) set.add(k);
+  } else {
+    for (const k of FULL_PHASES) set.add(k);
+  }
+  for (const k of TOOL_PHASES[tool] ?? []) set.add(k);
+  return set;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
-  try {
-    const { scanId, tool, target, options } = (await req.json()) as ScanRequest;
+  const supabase = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+  );
 
-    if (!target || !tool) {
-      return new Response(
-        JSON.stringify({ error: 'Target and tool are required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+  const json = (data: Record<string, unknown>, status = 200) =>
+    new Response(JSON.stringify(data), {
+      status,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+
+  let activeScanId: string | null = null;
+
+  try {
+    const body = (await req.json()) as ScanRequest;
+    const tool = (body.tool ?? '').trim();
+    const target = (body.target ?? '').trim();
+    const options: Record<string, string> = { ...(body.options ?? {}) };
+    const scanId = body.scanId;
+
+    if (!scanId || !target || !tool) {
+      return json({ error: 'scanId, target and tool are required' }, 400);
     }
 
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    );
-
-    const authHeader = req.headers.get('Authorization') ?? '';
-    const token = authHeader.replace('Bearer ', '');
+    const token = (req.headers.get('Authorization') ?? '').replace('Bearer ', '');
     const { data: userData } = await supabase.auth.getUser(token);
     const userId = userData.user?.id;
-
-    if (!userId) {
-      return new Response(
-        JSON.stringify({ error: 'Unauthorized' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
+    if (!userId) return json({ error: 'Unauthorized' }, 401);
 
     const { data: scanRow } = await supabase
       .from('scans')
-      .select('id')
+      .select('*')
       .eq('id', scanId)
       .eq('user_id', userId)
       .maybeSingle();
+    if (!scanRow) return json({ error: 'Scan not found or not owned by user' }, 403);
+    activeScanId = scanId;
 
-    if (!scanRow) {
-      return new Response(
-        JSON.stringify({ error: 'Scan not found or not owned by user' }),
-        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    // ── Authorization model (§3/§25) ──────────────────────────────────
+    // Rows created before the authorization column existed have NULL and are
+    // accepted as legacy (the old client showed a warning and the user
+    // pressed Launch). Any row that carries the column must have
+    // confirmed === true, otherwise the scan is rejected.
+    const authz = (scanRow.authorization ?? null) as Record<string, unknown> | null;
+    const legacyClient = authz === null;
+    if (!legacyClient && authz?.confirmed !== true) {
+      return json(
+        {
+          error: 'authorization_required',
+          message:
+            'Scan blocked: no recorded authorization. The user must confirm ' +
+            '"I am authorized to scan this target" before launching.',
+        },
+        403
       );
     }
 
-    await supabase.from('scans').update({
-      status: 'running',
-      started_at: new Date().toISOString(),
-    }).eq('id', scanId);
+    const profile = normalizeProfile(
+      body.profile ?? scanRow.profile ?? (options.profile as string) ?? null
+    );
+    const requestedPhases = phaseSelection(profile, tool);
 
+    const givenUrl = /^https?:\/\//i.test(target);
+    const hostname = target.replace(/^https?:\/\//i, '').split('/')[0].split(':')[0].trim();
+    const url = givenUrl ? target : `https://${hostname}`;
+    const targetType = classifyTarget(hostname, givenUrl);
+
+    // ── Shared pipeline state ─────────────────────────────────────────
     const vulnerabilities: VulnerabilityFinding[] = [];
     const scanResults: Record<string, unknown> = {
       tool,
       target,
+      profile,
+      target_type: targetType === 'url' ? 'url' : targetType,
       timestamp: new Date().toISOString(),
     };
+    const phaseStates: PhaseState[] = [];
+    const areas: CoverageArea[] = [];
+    const ctx: PhaseContext = {
+      hostname,
+      url,
+      givenUrl,
+      targetType,
+      profile,
+      options,
+      tool,
+      entries: [],
+      probeDefinitive: false,
+      delegated: [],
+    };
 
-    const url = target.startsWith('http') ? target : `https://${target}`;
-    const hostname = target.replace(/^https?:\/\//i, '').split('/')[0].split(':')[0];
+    const nowIso = () => new Date().toISOString();
+    const setScan = (patch: Record<string, unknown>) =>
+      supabase.from('scans').update(patch).eq('id', scanId);
+    const getStatus = async (): Promise<string> => {
+      const { data } = await supabase.from('scans').select('status').eq('id', scanId).maybeSingle();
+      return data?.status ?? '';
+    };
 
-    try {
-      // SSRF guard: refuse to scan private / loopback / link-local addresses.
-      const guard = await isPrivateHostname(hostname);
-      if (guard) {
-        throw new Error(`SSRF protection blocked scan of private address: ${hostname} (${guard})`);
-      }
-
-      if (tool === 'nmap') {
-        const r = await performNmapScan(hostname, options);
-        scanResults.ports = r.ports;
-        vulnerabilities.push(...r.vulnerabilities);
-      } else if (tool === 'masscan') {
-        const r = await performMasscanScan(hostname, options);
-        scanResults.ports = r.ports;
-        vulnerabilities.push(...r.vulnerabilities);
-      } else if (tool === 'nuclei') {
-        const r = await performNucleiScan(url, hostname, options);
-        scanResults.findings = r.findings;
-        vulnerabilities.push(...r.vulnerabilities);
-      } else if (tool === 'zap') {
-        const r = await performZapScan(url, options);
-        scanResults.findings = r.findings;
-        vulnerabilities.push(...r.vulnerabilities);
-      } else if (tool === 'nikto') {
-        const r = await performNiktoScan(url, options);
-        scanResults.findings = r.findings;
-        vulnerabilities.push(...r.vulnerabilities);
-      } else if (tool === 'whatweb') {
-        const r = await performWhatwebScan(url);
-        scanResults.technologies = r.technologies;
-        vulnerabilities.push(...r.vulnerabilities);
-      } else if (tool === 'httpx') {
-        const r = await performHttpxScan(url, hostname);
-        scanResults.probes = r.probes;
-        vulnerabilities.push(...r.vulnerabilities);
-      } else if (tool === 'dns') {
-        const r = await performDnsScan(hostname);
-        scanResults.records = r.records;
-        vulnerabilities.push(...r.vulnerabilities);
-      } else if (tool === 'sslyze') {
-        const r = await performSslyzeScan(hostname);
-        scanResults.tls = r.tls;
-        vulnerabilities.push(...r.vulnerabilities);
-      } else if (tool === 'trivy') {
-        const r = await performTrivyScan(target, options);
-        scanResults.findings = r.findings;
-        vulnerabilities.push(...r.vulnerabilities);
-      } else if (tool === 'semgrep') {
-        const r = await performSemgrepScan(target, options);
-        scanResults.findings = r.findings;
-        vulnerabilities.push(...r.vulnerabilities);
-      } else if (tool === 'gitleaks') {
-        const r = await performGitleaksScan(target, options);
-        scanResults.findings = r.findings;
-        vulnerabilities.push(...r.vulnerabilities);
-      } else if (tool === 'yara') {
-        const r = await performYaraScan(target, options);
-        scanResults.findings = r.findings;
-        vulnerabilities.push(...r.vulnerabilities);
-      } else {
-        throw new Error(`Unknown tool: ${tool}`);
-      }
-    } catch (scanError) {
-      scanResults.error = scanError instanceof Error ? scanError.message : 'Scan error';
+    async function beginPhase(def: PhaseDef): Promise<boolean> {
+      if ((await getStatus()) === 'cancelled') return false;
+      await supabase.from('scan_phases').upsert(
+        {
+          scan_id: scanId,
+          user_id: userId,
+          phase: def.phase,
+          key: def.key,
+          name: def.name,
+          status: 'running',
+          started_at: nowIso(),
+        },
+        { onConflict: 'scan_id,phase' }
+      );
+      await setScan({
+        progress: {
+          phase: def.phase,
+          total: PHASES.length,
+          key: def.key,
+          name: def.name,
+          percent: Math.round(((def.phase - 1) / PHASES.length) * 100),
+          state: 'running',
+          updated_at: nowIso(),
+        },
+      });
+      return true;
     }
 
-    await supabase.from('scans').update({
-      status: 'completed',
-      results: scanResults,
-      completed_at: new Date().toISOString(),
-    }).eq('id', scanId);
+    async function endPhase(
+      def: PhaseDef,
+      status: PhaseStatus,
+      summary: string,
+      detail: Record<string, unknown> = {}
+    ) {
+      phaseStates.push({ phase: def.phase, key: def.key, name: def.name, status, summary });
+      areas.push({
+        phase: def.phase,
+        key: def.key,
+        name: def.name,
+        status,
+        note: status === 'complete' ? undefined : summary,
+      });
+      await supabase.from('scan_phases').upsert(
+        {
+          scan_id: scanId,
+          user_id: userId,
+          phase: def.phase,
+          key: def.key,
+          name: def.name,
+          status,
+          summary,
+          detail,
+          completed_at: nowIso(),
+        },
+        { onConflict: 'scan_id,phase' }
+      );
+    }
 
-    return new Response(
-      JSON.stringify({ success: true, scanId, vulnerabilities, results: scanResults }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    function pushFindings(module: string, list: VulnerabilityFinding[]) {
+      for (const f of list) {
+        vulnerabilities.push({ detection_method: `engine_check:${module}`, ...f });
+      }
+    }
+
+    async function addEvidence(
+      phase: number,
+      toolName: string,
+      profile_: Record<string, unknown>,
+      stdout: string,
+      durationMs?: number
+    ) {
+      try {
+        await supabase.from('scan_evidence').insert({
+          scan_id: scanId,
+          user_id: userId,
+          phase,
+          tool: toolName,
+          command_profile: profile_,
+          stdout: truncate(stdout, 30000),
+          duration_ms: durationMs ?? null,
+          exit_code: 0,
+        });
+      } catch {
+        /* evidence must never break the scan */
+      }
+    }
+
+    const webGate = (): { run: boolean; reason: string } => {
+      const webOpen = ctx.entries.some((e) => WEB_PORTS.has(e.port) && e.state === 'open');
+      if (ctx.givenUrl) return { run: true, reason: 'explicit URL target' };
+      if (webOpen) return { run: true, reason: 'an open web port was observed' };
+      if (!ctx.probeDefinitive) return { run: true, reason: 'port states inconclusive — attempting HTTP anyway' };
+      return {
+        run: false,
+        reason: 'no HTTP service observed (every probed web port was definitively closed/filtered)',
+      };
+    };
+
+    // ── Phase executor ────────────────────────────────────────────────
+    async function executePhase(
+      def: PhaseDef
+    ): Promise<{ status: PhaseStatus; summary: string; detail?: Record<string, unknown> }> {
+      switch (def.key) {
+        case 'target_validation': {
+          if (targetType === 'invalid') {
+            throw new Error(
+              'Malformed target: expected a domain (example.com), an IP address, or an http(s) URL'
+            );
+          }
+          const guard = await isPrivateHostname(hostname);
+          if (guard) {
+            throw new Error(`SSRF protection blocked scan of private address: ${hostname} (${guard})`);
+          }
+          return {
+            status: 'complete',
+            summary:
+              `Validated ${hostname} as ${targetType}; authorization ` +
+              (legacyClient
+                ? 'recorded as legacy (old client did not capture it)'
+                : 'confirmed by the user before launch'),
+            detail: {
+              hostname,
+              url,
+              target_type: targetType,
+              profile,
+              authorization: legacyClient
+                ? { confirmed: false, note: 'scan row created by a pre-authorization client' }
+                : authz,
+            },
+          };
+        }
+
+        case 'dns_analysis': {
+          if (ctx.targetType === 'ipv4' || ctx.targetType === 'ipv6') {
+            return { status: 'skipped', summary: 'IP-literal target — DNS lookup not applicable' };
+          }
+          const t0 = performance.now();
+          const r = await performDnsScan(ctx.hostname);
+          pushFindings('dns', r.vulnerabilities);
+          scanResults.records = r.records;
+          await addEvidence(
+            2,
+            'dns-over-https',
+            { provider: 'dns.google', name: ctx.hostname },
+            JSON.stringify(r.records, null, 1),
+            Math.round(performance.now() - t0)
+          );
+          const n = Array.isArray(r.records)
+            ? r.records.length
+            : Object.keys((r.records as Record<string, unknown>) ?? {}).length;
+          return n > 0
+            ? {
+                status: 'complete',
+                summary: `Collected ${n} DNS record entries via DNS-over-HTTPS (A/AAAA/MX/NS/TXT/CAA + SPF/DMARC analysis)`,
+                detail: { provider: 'dns.google' },
+              }
+            : {
+                status: 'partial',
+                summary: 'DNS lookup returned no records — see evidence and findings for the reason',
+              };
+        }
+
+        case 'host_discovery': {
+          const probePorts = [443, 80, 22];
+          const t0 = performance.now();
+          const probes = await Promise.all(probePorts.map((p) => tcpProbe(ctx.hostname, p, false)));
+          const line = probes.map((pr, i) => `${probePorts[i]}/tcp ${pr.state}`).join('; ');
+          await addEvidence(
+            3,
+            'orion-engine',
+            { kind: 'tcp_connect_inference', ports: probePorts, icmp: 'unavailable in edge runtime' },
+            line,
+            Math.round(performance.now() - t0)
+          );
+          if (probes.every((pr) => pr.state === 'unchecked')) {
+            return {
+              status: 'unavailable',
+              summary:
+                'Host discovery unavailable: this runtime refused raw TCP connects (no ICMP either)',
+            };
+          }
+          const definitive = probes.some((pr) => pr.state === 'open' || pr.state === 'closed');
+          if (!definitive) {
+            return {
+              status: 'partial',
+              summary:
+                'ICMP is unavailable in this runtime; TCP probes on 443/80/22 all timed out — ' +
+                'reachability inconclusive (a timeout is NOT proof the host is down)',
+            };
+          }
+          return {
+            status: 'complete',
+            summary: `Host reachable (TCP connect evidence: ${line})`,
+            detail: { method: 'tcp_connect_inference', icmp: false },
+          };
+        }
+
+        case 'port_discovery': {
+          const scope = resolvePortScope(
+            ctx.profile,
+            TOP_PORTS.map((p) => p.port),
+            ctx.options
+          );
+          const t0 = performance.now();
+          const runner = ctx.tool === 'masscan' ? performMasscanScan : performNmapScan;
+          const r = await runner(ctx.hostname, { ...ctx.options, ports: scope.testExpr });
+          const durationMs = Math.round(performance.now() - t0);
+          pushFindings('port_scan', r.vulnerabilities);
+          ctx.entries = r.ports.map((p) => ({
+            port: p.port,
+            protocol: 'tcp' as const,
+            state: mapPortState(p.state),
+            service: p.service,
+            banner: p.banner || undefined,
+            elapsed_ms: p.elapsed_ms,
+          }));
+          ctx.probeDefinitive = ctx.entries.some((e) => e.state !== 'error');
+
+          const counts = countStates(ctx.entries);
+          counts.not_tested = Math.max(0, scope.requestedCount - scope.testPorts.length);
+
+          let delegated: NonNullable<PortCoverage['delegated']> = null;
+          let status: PhaseStatus = 'complete';
+          let summary =
+            `Probed ${scope.testPorts.length} of ${scope.requestedCount} requested ports ` +
+            `(${counts.open} open, ${counts.closed} closed, ${counts.timeout} timeout, ` +
+            `${counts.filtered} filtered, ${counts.error} error) in ${durationMs}ms`;
+
+          if (scope.delegated) {
+            const { data: agents } = await supabase
+              .from('agents')
+              .select('*')
+              .eq('user_id', userId)
+              .in('status', ['online', 'busy'])
+              .gte('last_seen', new Date(Date.now() - 120_000).toISOString());
+            const capable = (agents ?? []).filter((a) =>
+              Array.isArray(a.tools) &&
+              a.tools.some((t: { name: string; installed: boolean }) => t.name === 'nmap' && t.installed)
+            );
+            if (capable.length > 0) {
+              const { data: task } = await supabase
+                .from('agent_tasks')
+                .insert({
+                  user_id: userId,
+                  scan_id: scanId,
+                  tool: 'nmap',
+                  target: ctx.hostname,
+                  kind: 'scan',
+                  status: 'pending',
+                  options: { ports: '1-65535', coverage_phase: 'port_discovery' },
+                })
+                .select()
+                .single();
+              if (task) {
+                delegated = { tool: 'nmap', task_id: task.id, scope: '1-65535' };
+                ctx.delegated.push({ phase: 4, task_id: task.id, key: 'port_discovery' });
+                status = 'partial';
+                summary +=
+                  `. Full 1-65535 sweep delegated to agent "${capable[0].name}" ` +
+                  `(task ${String(task.id).slice(0, 8)}… — running)`;
+                await audit(supabase, userId, 'scan_delegated', {
+                  scan_id: scanId,
+                  task_id: task.id,
+                  tool: 'nmap',
+                  scope: '1-65535',
+                });
+              }
+            }
+            if (!delegated) {
+              status = 'partial';
+              summary +=
+                '. Full-range sweep NOT run: no online agent with nmap — ' +
+                'this scan is not comprehensive for ports.';
+            }
+          }
+
+          const untestedCount = Math.max(0, scope.requestedCount - scope.testPorts.length);
+          const coverage: PortCoverage = {
+            requested: { expr: scope.requestedExpr, count: scope.requestedCount },
+            tested: ctx.entries.length,
+            not_tested: untestedCount
+              ? {
+                  expr: `${scope.requestedExpr} (minus the ${scope.testPorts.length} probed here)`,
+                  count: untestedCount,
+                  reason: scope.reason,
+                }
+              : null,
+            counts,
+            entries: ctx.entries,
+            tool: 'orion-engine/tcp-connect',
+            delegated,
+          };
+          scanResults.port_coverage = coverage;
+          scanResults.ports = r.ports; // legacy array shape kept for old clients
+          await addEvidence(
+            4,
+            'orion-engine',
+            {
+              kind: 'tcp_connect',
+              ports_requested: scope.requestedExpr,
+              ports_tested: scope.testPorts.length,
+              concurrency: PORT_CONCURRENCY,
+            },
+            r.ports
+              .map((p) => `${p.port}/tcp ${p.state} ${p.service}${p.banner ? ` — ${p.banner}` : ''}`)
+              .join('\n'),
+            durationMs
+          );
+          return {
+            status,
+            summary,
+            detail: {
+              requested: coverage.requested,
+              tested: coverage.tested,
+              counts,
+              delegated,
+            },
+          };
+        }
+
+        case 'service_detection': {
+          if (ctx.entries.length === 0) {
+            return { status: 'skipped', summary: 'No port data — port discovery did not run' };
+          }
+          const open = ctx.entries.filter((e) => e.state === 'open');
+          if (open.length === 0) {
+            return { status: 'complete', summary: 'No open ports — no services to identify' };
+          }
+          const identified = open.map(
+            (e) =>
+              `${e.port}/${e.protocol} → ${e.service ?? 'unknown'}` +
+              (e.banner ? ` (observed banner: ${e.banner})` : '')
+          );
+          await addEvidence(
+            5,
+            'orion-engine',
+            {
+              kind: 'service_identification',
+              source: 'connect-time banners and HTTP Server headers',
+              note: 'service labels are port-based expectations; banners are observed evidence',
+            },
+            identified.join('\n')
+          );
+          return {
+            status: 'complete',
+            summary:
+              `Identified ${open.length} open service(s) from connect-time banners and HTTP ` +
+              'headers (no version-scan binary was executed on the edge runtime)',
+            detail: { services: identified },
+          };
+        }
+
+        case 'http_analysis': {
+          const gate = webGate();
+          if (!gate.run) return { status: 'skipped', summary: `HTTP analysis skipped: ${gate.reason}` };
+          const t0 = performance.now();
+          const r = await performHttpxScan(ctx.url, ctx.hostname);
+          pushFindings('httpx', r.vulnerabilities);
+          scanResults.probes = r.probes;
+          await addEvidence(
+            6,
+            'orion-engine',
+            { kind: 'http_probe', url: ctx.url },
+            r.probes.join('\n'),
+            Math.round(performance.now() - t0)
+          );
+          const down = r.probes.filter((p) => p.includes('DOWN')).length;
+          if (r.probes.length > 0 && down === r.probes.length) {
+            return {
+              status: 'partial',
+              summary: `HTTP probes failed on all ${r.probes.length} attempted endpoint(s)`,
+            };
+          }
+          return {
+            status: 'complete',
+            summary: `HTTP probes completed: ${r.probes.length} endpoint(s) checked (status, redirect, title)`,
+          };
+        }
+
+        case 'tls_analysis': {
+          const port443 = ctx.entries.find((e) => e.port === 443);
+          const httpsGiven = ctx.url.startsWith('https://');
+          if (!httpsGiven && port443 && ['closed', 'timeout', 'filtered'].includes(port443.state)) {
+            return {
+              status: 'skipped',
+              summary:
+                `TLS not testable: 443/tcp is ${port443.state}` +
+                (port443.state === 'timeout'
+                  ? ' (timeout is not proof the service is absent — it may be filtered)'
+                  : ''),
+            };
+          }
+          if (!httpsGiven && ctx.probeDefinitive && !port443) {
+            return { status: 'skipped', summary: 'TLS not testable: 443/tcp was not in the probed scope' };
+          }
+          const t0 = performance.now();
+          const r = await performSslyzeScan(ctx.hostname);
+          pushFindings('tls', r.vulnerabilities);
+          scanResults.tls = r.tls;
+          await addEvidence(
+            7,
+            'orion-engine',
+            { kind: 'tls_handshake', host: ctx.hostname },
+            typeof r.tls === 'string' ? r.tls : JSON.stringify(r.tls, null, 1),
+            Math.round(performance.now() - t0)
+          );
+          return {
+            status: 'complete',
+            summary: 'TLS handshake, certificate data and HSTS policy collected',
+          };
+        }
+
+        case 'technology_identification': {
+          const gate = webGate();
+          if (!gate.run) {
+            return { status: 'skipped', summary: `Technology identification skipped: ${gate.reason}` };
+          }
+          const t0 = performance.now();
+          const r = await performWhatwebScan(ctx.url);
+          pushFindings('whatweb', r.vulnerabilities);
+          scanResults.technologies = r.technologies;
+          await addEvidence(
+            8,
+            'orion-engine',
+            { kind: 'technology_fingerprint', url: ctx.url },
+            (r.technologies ?? []).join('\n'),
+            Math.round(performance.now() - t0)
+          );
+          return {
+            status: 'complete',
+            summary: `Identified ${r.technologies.length} technology indicator(s) from live responses`,
+          };
+        }
+
+        case 'configuration_analysis': {
+          const gate = webGate();
+          if (!gate.run) {
+            return { status: 'skipped', summary: `Configuration analysis skipped: ${gate.reason}` };
+          }
+          const t0 = performance.now();
+          const r = await performZapScan(ctx.url, ctx.options);
+          pushFindings('configuration', r.vulnerabilities);
+          const arr = (Array.isArray(scanResults.findings) ? scanResults.findings : []) as string[];
+          scanResults.findings = [...arr, ...(r.findings ?? []).map((f) => `[configuration] ${f}`)];
+          await addEvidence(
+            9,
+            'orion-engine',
+            { kind: 'passive_header_analysis', url: ctx.url },
+            (r.findings ?? []).join('\n'),
+            Math.round(performance.now() - t0)
+          );
+          return {
+            status: 'complete',
+            summary:
+              `Passive configuration analysis completed: ${r.findings.length} observation(s) ` +
+              '(headers, cookies, mixed content, CSRF heuristics)',
+          };
+        }
+
+        case 'vulnerability_assessment': {
+          if (profile === 'quick') {
+            return { status: 'skipped', summary: 'Not part of the quick profile' };
+          }
+          const gate = webGate();
+          const toolModules: Record<string, string> = {
+            nuclei: 'nuclei',
+            nikto: 'nikto',
+            trivy: 'trivy',
+            semgrep: 'semgrep',
+            gitleaks: 'gitleaks',
+            yara: 'yara',
+          };
+          const modules: string[] = [];
+          if (toolModules[ctx.tool]) modules.push(toolModules[ctx.tool]);
+          if (profile === 'comprehensive') {
+            for (const m of ['nuclei', 'nikto']) {
+              if (!modules.includes(m)) modules.push(m);
+            }
+          }
+          if (modules.length === 0) {
+            return {
+              status: 'skipped',
+              summary:
+                `No vulnerability module selected — the ${profile} profile covers ` +
+                'network/service/HTTP/TLS/DNS checks. Choose a vulnerability tool or the ' +
+                'comprehensive profile to run vulnerability checks.',
+            };
+          }
+
+          const ran: string[] = [];
+          const notes: string[] = [];
+          const agentTasks: string[] = [];
+
+          for (const m of modules) {
+            if ((m === 'nuclei' || m === 'nikto') && !gate.run) {
+              notes.push(`${m}: skipped — ${gate.reason}`);
+              continue;
+            }
+            const t0 = performance.now();
+            let r: { findings?: string[]; vulnerabilities: VulnerabilityFinding[] } | null = null;
+            switch (m) {
+              case 'nuclei':
+                r = await performNucleiScan(ctx.url, ctx.hostname, ctx.options);
+                break;
+              case 'nikto':
+                r = await performNiktoScan(ctx.url, ctx.options);
+                break;
+              case 'trivy':
+                r = await performTrivyScan(ctx.target, ctx.options);
+                break;
+              case 'semgrep':
+                r = await performSemgrepScan(ctx.target, ctx.options);
+                break;
+              case 'gitleaks':
+                r = await performGitleaksScan(ctx.target, ctx.options);
+                break;
+              case 'yara':
+                r = await performYaraScan(ctx.target, ctx.options);
+                break;
+            }
+            if (r) {
+              pushFindings(m, r.vulnerabilities);
+              const fs = r.findings ?? [];
+              const arr = (Array.isArray(scanResults.findings) ? scanResults.findings : []) as string[];
+              scanResults.findings = [...arr, ...fs.map((f) => `[${m}] ${f}`)];
+              ran.push(m);
+              await addEvidence(
+                10,
+                m,
+                { module: m, target: ctx.target },
+                fs.join('\n'),
+                Math.round(performance.now() - t0)
+              );
+            }
+          }
+
+          // Comprehensive: hand the binary nuclei run to an agent when possible.
+          if (profile === 'comprehensive' && gate.run && modules.includes('nuclei')) {
+            const { data: agents } = await supabase
+              .from('agents')
+              .select('*')
+              .eq('user_id', userId)
+              .in('status', ['online', 'busy'])
+              .gte('last_seen', new Date(Date.now() - 120_000).toISOString());
+            const capable = (agents ?? []).filter((a) =>
+              Array.isArray(a.tools) &&
+              a.tools.some((t: { name: string; installed: boolean }) => t.name === 'nuclei' && t.installed)
+            );
+            if (capable.length > 0) {
+              const { data: task } = await supabase
+                .from('agent_tasks')
+                .insert({
+                  user_id: userId,
+                  scan_id: scanId,
+                  tool: 'nuclei',
+                  target: ctx.url,
+                  kind: 'scan',
+                  status: 'pending',
+                  options: { coverage_phase: 'vulnerability_assessment' },
+                })
+                .select()
+                .single();
+              if (task) {
+                agentTasks.push(task.id);
+                ctx.delegated.push({
+                  phase: 10,
+                  task_id: task.id,
+                  key: 'vulnerability_assessment',
+                });
+                notes.push(`binary nuclei delegated to agent "${capable[0].name}" (running)`);
+                await audit(supabase, userId, 'scan_delegated', {
+                  scan_id: scanId,
+                  task_id: task.id,
+                  tool: 'nuclei',
+                });
+              }
+            } else {
+              notes.push('binary nuclei (agent-side templates) not run: no online agent with nuclei');
+            }
+          }
+
+          if (ran.length === 0 && notes.length === 0) {
+            return { status: 'skipped', summary: 'No vulnerability module could run for this target' };
+          }
+          const status: PhaseStatus =
+            ran.length === 0 ? 'skipped' : notes.length > 0 || agentTasks.length > 0 ? 'partial' : 'complete';
+          const summary =
+            (ran.length ? `Ran module(s): ${ran.join(', ')}. ` : '') +
+            (notes.length ? notes.join('; ') : `${ran.length} module(s) completed without gaps`);
+          return { status, summary, detail: { ran, notes, agent_tasks: agentTasks } };
+        }
+
+        case 'evidence_collection': {
+          const { count } = await supabase
+            .from('scan_evidence')
+            .select('id', { count: 'exact', head: true })
+            .eq('scan_id', scanId);
+          const records = count ?? 0;
+          return {
+            status: records > 0 ? 'complete' : 'partial',
+            summary:
+              records > 0
+                ? `${records} evidence record(s) stored (raw outputs, command profiles, timings)`
+                : 'No evidence records were stored — check function logs',
+            detail: { records },
+          };
+        }
+
+        case 'correlation': {
+          const before = vulnerabilities.length;
+          const deduped: VulnerabilityFinding[] = [];
+          const index = new Map<string, number>();
+          for (const f of vulnerabilities) {
+            const k = `${f.title}::${f.port ?? ''}`;
+            const existing = index.get(k);
+            if (existing !== undefined) {
+              const prev = deduped[existing];
+              prev.evidence = `${prev.evidence} | ${f.evidence}`.slice(0, 2000);
+              continue;
+            }
+            index.set(k, deduped.length);
+            deduped.push({ ...f });
+          }
+          const stamped = deduped.map((f) => stampFinding(f) as VulnerabilityFinding);
+          vulnerabilities.length = 0;
+          vulnerabilities.push(...stamped);
+          const merged = before - stamped.length;
+          return {
+            status: 'complete',
+            summary:
+              merged > 0
+                ? `Correlated ${before} findings → ${stamped.length} unique (${merged} duplicate(s) merged)`
+                : `${stamped.length} findings, no duplicates; stamped with tool, detection method and confidence`,
+            detail: { before, after: stamped.length, merged },
+          };
+        }
+
+        case 'risk_classification': {
+          const bySev: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+          for (const f of vulnerabilities) bySev[f.severity] = (bySev[f.severity] ?? 0) + 1;
+          scanResults.severity_counts = bySev;
+          return {
+            status: 'complete',
+            summary:
+              `${vulnerabilities.length} finding(s): ${bySev.critical} critical, ${bySev.high} high, ` +
+              `${bySev.medium} medium, ${bySev.low} low, ${bySev.info} informational`,
+            detail: bySev,
+          };
+        }
+
+        case 'remediation': {
+          const missing = vulnerabilities.filter((f) => !(f.remediation ?? '').trim()).length;
+          return missing === 0
+            ? { status: 'complete', summary: 'Every finding carries an evidence-based remediation' }
+            : {
+                status: 'partial',
+                summary: `${missing} finding(s) lack a specific remediation — review them manually`,
+              };
+        }
+
+        case 'report': {
+          return {
+            status: 'complete',
+            summary:
+              `Report assembled: ${vulnerabilities.length} finding(s), ` +
+              `${ctx.delegated.length} delegated agent task(s)`,
+            detail: { delegated: ctx.delegated },
+          };
+        }
+
+        default:
+          return { status: 'skipped', summary: 'Unknown phase' };
+      }
+    }
+
+    // ── Pipeline ──────────────────────────────────────────────────────
+    await setScan({
+      status: 'running',
+      started_at: new Date().toISOString(),
+      profile,
+      target_type: targetType === 'url' ? 'url' : targetType,
+      progress: { percent: 0, state: 'starting', updated_at: nowIso() },
+    });
+    await audit(supabase, userId, 'scan_requested', {
+      scan_id: scanId,
+      profile,
+      tool,
+      target: hostname,
+      target_type: targetType,
+      legacy_client: legacyClient,
+    });
+
+    let abort: { reason: string; httpStatus: number } | null = null;
+    let cancelled = false;
+
+    for (const def of PHASES) {
+      if (abort || cancelled) {
+        await endPhase(def, 'skipped', abort ? `Scan aborted: ${abort.reason}` : 'Scan cancelled by user');
+        continue;
+      }
+      if (!requestedPhases.has(def.key)) {
+        await endPhase(
+          def,
+          'skipped',
+          profile === 'custom'
+            ? 'Not selected for this custom scan'
+            : `Not part of the ${profile} profile`
+        );
+        continue;
+      }
+      const began = await beginPhase(def);
+      if (!began) {
+        cancelled = true;
+        await endPhase(def, 'skipped', 'Scan cancelled by user');
+        continue;
+      }
+      try {
+        const r = await executePhase(def);
+        if (r.status === 'error' && def.key === 'target_validation') {
+          abort = { reason: r.summary, httpStatus: 400 };
+        }
+        await endPhase(def, r.status, r.summary, r.detail);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Phase failed unexpectedly';
+        if (def.key === 'target_validation') abort = { reason: msg, httpStatus: 403 };
+        await endPhase(def, 'error', msg);
+        await addEvidence(def.phase, 'orion-engine', { phase: def.key, error: true }, msg);
+      }
+    }
+
+    // ── Finalize ──────────────────────────────────────────────────────
+    // A cancel that raced past the last beginPhase() check is honoured here.
+    if (!cancelled && !abort && (await getStatus()) === 'cancelled') {
+      cancelled = true;
+    }
+    const coverage = computeCoverage(areas);
+    scanResults.coverage = coverage;
+    scanResults.phases = phaseStates;
+    scanResults.limitations = coverage.limitations;
+    scanResults.scope = {
+      profile,
+      tool,
+      requested_phases: [...requestedPhases],
+      target_type: targetType,
+    };
+
+    if (vulnerabilities.length > 0 && !abort) {
+      const rows = vulnerabilities.map((f) => ({
+        scan_id: scanId,
+        user_id: userId,
+        title: f.title,
+        severity: f.severity,
+        description: f.description ?? '',
+        evidence: f.evidence ?? '',
+        remediation: f.remediation ?? '',
+        cve: f.cve ?? null,
+        port: f.port ?? null,
+        service: f.service ?? null,
+        confidence: f.confidence ?? null,
+        detection_method: f.detection_method ?? null,
+        tool: f.tool ?? null,
+        tool_version: f.tool_version ?? null,
+        detected_at: new Date().toISOString(),
+        asset: ctx.hostname,
+        protocol: f.port ? 'tcp' : null,
+        refs: f.refs ?? null,
+      }));
+      const { error: insErr } = await supabase.from('vulnerabilities').insert(rows);
+      if (insErr) {
+        await addEvidence(15, 'orion-engine', { finding_insert_error: true }, insErr.message);
+      }
+    }
+
+    const waiting = !abort && !cancelled && ctx.delegated.length > 0;
+    const finalStatus = abort
+      ? 'failed'
+      : cancelled
+      ? 'cancelled'
+      : waiting
+      ? 'waiting_agent'
+      : 'completed';
+
+    const patch: Record<string, unknown> = {
+      results: scanResults,
+      coverage,
+      status: finalStatus,
+      progress: waiting
+        ? { percent: 90, state: 'waiting_agent', updated_at: nowIso() }
+        : {
+            percent: cancelled || abort ? coverage.percent : 100,
+            state: cancelled ? 'cancelled' : abort ? 'failed' : 'done',
+            updated_at: nowIso(),
+          },
+    };
+    if (!waiting) patch.completed_at = new Date().toISOString();
+    await setScan(patch);
+
+    await audit(supabase, userId, abort ? 'scan_failed' : cancelled ? 'scan_cancelled' : 'scan_completed', {
+      scan_id: scanId,
+      profile,
+      tool,
+      target: hostname,
+      findings: vulnerabilities.length,
+      coverage_percent: coverage.percent,
+      comprehensive: coverage.comprehensive,
+      ...(abort ? { reason: abort.reason } : {}),
+    });
+
+    if (abort) {
+      return json(
+        { success: false, error: abort.reason, scanId, phases: phaseStates, coverage },
+        abort.httpStatus
+      );
+    }
+
+    return json({
+      success: !cancelled,
+      cancelled,
+      scanId,
+      vulnerabilities,
+      results: scanResults,
+      phases: phaseStates,
+      coverage,
+      waitingForAgent: ctx.delegated.map((d) => d.task_id),
+    });
   } catch (err) {
-    return new Response(
-      JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    if (activeScanId) {
+      try {
+        await supabase
+          .from('scans')
+          .update({
+            status: 'failed',
+            results: { error: msg },
+            coverage: { areas: [], percent: 0, comprehensive: false, limitations: [msg] },
+            progress: { percent: 0, state: 'failed', updated_at: new Date().toISOString() },
+            completed_at: new Date().toISOString(),
+          })
+          .eq('id', activeScanId);
+      } catch {
+        /* best effort */
+      }
+    }
+    return json({ error: msg }, 500);
   }
 });
 
@@ -435,7 +1370,7 @@ async function performNmapScan(hostname: string, options: Record<string, string>
   }
 
   const results: PortResult[] = [];
-  for (const group of chunk(portList, 9)) {
+  for (const group of chunk(portList, PORT_CONCURRENCY)) {
     const batch = await Promise.all(
       group.map(async (port) => {
         const known = TOP_PORTS.find((p) => p.port === port);
