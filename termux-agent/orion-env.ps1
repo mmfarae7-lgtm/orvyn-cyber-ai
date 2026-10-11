@@ -5,8 +5,11 @@
 # (highest priority first):
 #
 #   1. Environment variables: ORION_SUPABASE_URL, ORION_ANON_KEY
-#   2. $HOME\..\orion-config.ps1
+#   2. $HOME\.orion-config.ps1
 #   3. <agent dir>\orion-config.ps1  (from orion-config.ps1.example)
+#
+# Optional (enables registration, heartbeats and capability-aware
+# dispatch): ORION_USER_EMAIL, ORION_USER_PASSWORD.
 #
 # There is deliberately NO hardcoded default project. If nothing is
 # configured the agent refuses to start.
@@ -18,10 +21,13 @@ function Import-OrionEnv {
     # Capture environment-provided values BEFORE any file is dot-sourced,
     # so an explicit setting always wins over a config file.
     $captured = @{
-        Url   = $env:ORION_SUPABASE_URL
-        Anon  = $env:ORION_ANON_KEY
-        Agent = $env:ORION_AGENT_ID
-        Poll  = $env:ORION_POLL_INTERVAL
+        Url      = $env:ORION_SUPABASE_URL
+        Anon     = $env:ORION_ANON_KEY
+        Agent    = $env:ORION_AGENT_ID
+        Poll     = $env:ORION_POLL_INTERVAL
+        Timeout  = $env:ORION_TASK_TIMEOUT
+        Email    = $env:ORION_USER_EMAIL
+        Password = $env:ORION_USER_PASSWORD
     }
 
     $configFiles = @()
@@ -36,6 +42,9 @@ function Import-OrionEnv {
     $env:SUPABASE_ANON_KEY  = if ($captured.Anon)  { $captured.Anon }  elseif ($env:ORION_ANON_KEY)     { $env:ORION_ANON_KEY }     else { $null }
     $env:ORION_AGENT_ID     = if ($captured.Agent) { $captured.Agent } elseif ($env:ORION_AGENT_ID)     { $env:ORION_AGENT_ID }     else { $null }
     $env:ORION_POLL_INTERVAL = if ($captured.Poll) { $captured.Poll } elseif ($env:ORION_POLL_INTERVAL) { $env:ORION_POLL_INTERVAL } else { $null }
+    $env:ORION_TASK_TIMEOUT  = if ($captured.Timeout) { $captured.Timeout } elseif ($env:ORION_TASK_TIMEOUT) { $env:ORION_TASK_TIMEOUT } else { $null }
+    $env:ORION_USER_EMAIL    = if ($captured.Email) { $captured.Email } elseif ($env:ORION_USER_EMAIL) { $env:ORION_USER_EMAIL } else { $null }
+    $env:ORION_USER_PASSWORD = if ($captured.Password) { $captured.Password } elseif ($env:ORION_USER_PASSWORD) { $env:ORION_USER_PASSWORD } else { $null }
 }
 
 function Assert-OrionConfig {

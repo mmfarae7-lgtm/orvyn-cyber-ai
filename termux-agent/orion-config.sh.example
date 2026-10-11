@@ -15,11 +15,25 @@ ORION_SUPABASE_URL="https://YOUR-PROJECT-REF.supabase.co"
 # This key is safe to ship in a client app; it is protected by RLS.
 ORION_ANON_KEY="YOUR-ANON-KEY"
 
-# Optional: pin the agent identity (default: hostname-timestamp)
+# Optional: pin the agent identity (default: stable key persisted in
+# ~/.orion-agent-id — do NOT use a hostname-timestamp id, it orphans
+# the agent's registration on every restart)
 # ORION_AGENT_ID="my-phone"
 
 # Optional: seconds between polls (default: 5)
 # ORION_POLL_INTERVAL="5"
 
+# Optional: max seconds per tool run before the agent kills it and
+# reports a timeout (default: 1800)
+# ORION_TASK_TIMEOUT="1800"
+
 # Optional: path to your YARA rules file
 # ORION_YARA_RULES="$HOME/orion-yara-rules.yar"
+
+# Strongly recommended: a signed-in platform user. Enables agent
+# registration, heartbeats, live progress and capability-aware task
+# dispatch (tasks are matched to the tools this agent really has).
+# Without these the agent runs in legacy anon mode: it still works, but
+# the platform cannot discover its tools or route tasks to it.
+# ORION_USER_EMAIL="you@example.com"
+# ORION_USER_PASSWORD="your-password"

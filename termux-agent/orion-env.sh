@@ -10,12 +10,17 @@
 #   3. <agent dir>/orion-config.sh   (created from orion-config.sh.example)
 #   4. <repo root>/.env
 #
+# Optional (enables capability-aware task dispatch, registration and
+# heartbeats — strongly recommended):
+#   ORION_USER_EMAIL, ORION_USER_PASSWORD — a signed-in platform user.
+#
 # There is deliberately NO hardcoded default project. If nothing is
 # configured the agent refuses to start, so it can never silently poll
 # a backend that does not belong to you.
 #
 # Sets:
 #   SUPABASE_URL, SUPABASE_ANON_KEY, AGENT_ID, POLL_INTERVAL
+#   ORION_USER_EMAIL, ORION_USER_PASSWORD (optional)
 # Provides:
 #   orion_require_config  - aborts with instructions if unconfigured
 # ====================================================================
@@ -31,6 +36,8 @@ orion_env_load() {
   local env_agent="${ORION_AGENT_ID:-}"
   local env_poll="${ORION_POLL_INTERVAL:-}"
   local env_yara="${ORION_YARA_RULES:-}"
+  local env_user_email="${ORION_USER_EMAIL:-}"
+  local env_user_password="${ORION_USER_PASSWORD:-}"
 
   # 2) per-user config
   if [ -f "$HOME/.orion-config.sh" ]; then
@@ -58,6 +65,8 @@ orion_env_load() {
   AGENT_ID="${env_agent:-${ORION_AGENT_ID:-${AGENT_ID:-}}}"
   POLL_INTERVAL="${env_poll:-${ORION_POLL_INTERVAL:-${POLL_INTERVAL:-5}}}"
   YARA_RULES="${env_yara:-${ORION_YARA_RULES:-}}"
+  ORION_USER_EMAIL="${env_user_email:-${ORION_USER_EMAIL:-}}"
+  ORION_USER_PASSWORD="${env_user_password:-${ORION_USER_PASSWORD:-}}"
 }
 
 orion_require_config() {
